@@ -1,0 +1,41 @@
+# 压缩打包：
+tar -czvf filename.tar.gz directory/  
+# 输出可视化图片：
+python ./tools/inference/torch_inf_vis.py -c ./configs/deimv2/deimv2_dinov3_s_coco.yml -r ./outputs/deimv2_dinov3_s_coco/last.pth -d ./visdrone/test_images/ -o ./visdrone/result/
+# 激活环境：
+conda activate deimv2
+# 训练：
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --master_port=7777 --nproc_per_node=4 train.py -c configs/deimv2/deimv2_dinov3_${model}_coco.yml --use-amp --seed=0
+# 微调：
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --master_port=7777 --nproc_per_node=4 train.py -c configs/deimv2/deimv2_dinov3_x_coco.yml --use-amp --seed=0 -t model.pth
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --master_port=7777 --nproc_per_node=4 train.py -c ./configs/deimv2/deimv2_dinov3_x_coco.yml --use-amp --seed=0 -t deimv2_dinov3_x_coco.pth -u train_dataloader.total_batch_size=4> train_log.txt 2>&1 &
+
+# 创建会话
+screen -S train
+
+# 运行命令 # 按 Ctrl+A 然后按 D 分离会话
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --master_port=7777 --nproc_per_node=4 train.py -c ./configs/deimv2/deimv2_dinov3_x_coco.yml --use-amp --seed=0 -t deimv2_dinov3_x_coco.pth -u train_dataloader.total_batch_size=4
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --master_port=7777 --nproc_per_node=4 train_small_object.py -c configs/deimv2/deimv2_dinov3_x_small_object.yml -t /data/wyh/DEIMv2/deimv2_dinov3_x_coco.pth  -u train_dataloader.total_batch_size=4
+
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --master_port=7777 --nproc_per_node=4 train_small_object.py -c configs/deimv2/deimv2_dinov3_x_small_object.yml -t /data/wyh/DEIMv2/deimv2_dinov3_x_coco.pth  -u train_dataloader.total_batch_size=8 print_freq=100
+nohup bash -c "CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --master_port=7777 --nproc_per_node=4 train_small_object.py -c configs/deimv2/deimv2_dinov3_x_small_object.yml -t /data/wyh/DEIMv2/deimv2_dinov3_x_coco.pth  -u train_dataloader.total_batch_size=8 print_freq=100 " > newtrain_log.txt 2>&1 &
+
+# 杀死进程
+
+# 杀死所有 train.py 相关进程
+pkill -f train.py
+pkill -f train_small_object.py
+
+# 强制杀死
+pkill -9 -f train.py
+
+# 查找进程ID
+ps aux | grep train.py
+
+# 杀死指定进程
+kill -9 <PID>
+
+# 杀死多个进程
+kill -9 <PID1> <PID2> <PID3>
+
+nohup bash -c "CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --master_port=7777 --nproc_per_node=4 train.py -c configs/deimv2/deimv2_dinov3_x_coco.yml --use-amp --seed=0 -r ./outputs/deimv2_dinov3_x_coco/last.pth" > newtrain_log.txt 2>&1 &

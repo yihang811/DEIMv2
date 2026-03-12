@@ -75,6 +75,12 @@ optimizer:
   betas: [0.9, 0.999]
   weight_decay: 0.000125
 
+epoches: 96 #  Total epochs: 80 for training + EMA  for 4n = 12. n refers to the model size in the matched config.
+
+flat_epoch: 44    # 4 + 20 // 2
+no_aug_epoch: 16  # 4n
+
+
 ## Dense O2O: Mosaic + Mixup + CopyBlend
 train_dataloader: 
   dataset: 
@@ -93,12 +99,12 @@ train_dataloader:
         - {type: Normalize, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
         - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
       policy:
-        epoch: [4, 29, 50]   # list 
+        epoch: [4, 44, 80]   # list 
 
   collate_fn:
-    mixup_epochs: [4, 29]
-    stop_epoch: 50
-    copyblend_epochs: [4, 50]
+    mixup_epochs: [4, 44]
+    stop_epoch: 80
+    copyblend_epochs: [4, 80]
     base_size_repeat: 3
 
 val_dataloader:
