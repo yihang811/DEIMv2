@@ -24,26 +24,42 @@ from .dinov3 import DinoVisionTransformer
 
 
 class SpatialPriorModulev2(nn.Module):
-    def __init__(self, inplanes=16):
+    def __init__(self, inplanes=16, use_p2=False):
         super().__init__()
+        self.use_p2 = use_p2
 
-        # 1/4
-        self.stem = nn.Sequential(
-            *[
+        if use_p2:
+            # 1/2 (stride=2) - for P2 generation
+            self.stem_conv = nn.Sequential(
                 nn.Conv2d(3, inplanes, kernel_size=3, stride=2, padding=1, bias=False),
                 nn.SyncBatchNorm(inplanes),
                 nn.GELU(),
-                nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
-            ]
-        )
-        # 1/8
+            )
+            # 1/4 (stride=4) - P2
+            self.p2_conv = nn.Sequential(
+                nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+                nn.SyncBatchNorm(2 * inplanes),
+                nn.GELU(),
+            )
+        else:
+            # Original: 1/4 (no P2 output)
+            self.stem = nn.Sequential(
+                *[
+                    nn.Conv2d(3, inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+                    nn.SyncBatchNorm(inplanes),
+                    nn.GELU(),
+                    nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
+                ]
+            )
+        
+        # 1/8 (stride=8) - P3
         self.conv2 = nn.Sequential(
             *[
-                nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+                nn.Conv2d(2 * inplanes if use_p2 else inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
                 nn.SyncBatchNorm(2 * inplanes),
             ]
         )
-        # 1/16
+        # 1/16 (stride=16) - P4
         self.conv3 = nn.Sequential(
             *[
                 nn.GELU(),
@@ -51,7 +67,7 @@ class SpatialPriorModulev2(nn.Module):
                 nn.SyncBatchNorm(4 * inplanes),
             ]
         )
-        # 1/32
+        # 1/32 (stride=32) - P5
         self.conv4 = nn.Sequential(
             *[
                 nn.GELU(),
@@ -61,12 +77,19 @@ class SpatialPriorModulev2(nn.Module):
         )
 
     def forward(self, x):
-        c1 = self.stem(x)
-        c2 = self.conv2(c1)     # 1/8
-        c3 = self.conv3(c2)     # 1/16
-        c4 = self.conv4(c3)     # 1/32
-
-        return c2, c3, c4
+        if self.use_p2:
+            x = self.stem_conv(x)      # 1/2
+            c1 = self.p2_conv(x)        # 1/4 (P2)
+            c2 = self.conv2(c1)         # 1/8 (P3)
+            c3 = self.conv3(c2)         # 1/16 (P4)
+            c4 = self.conv4(c3)         # 1/32 (P5)
+            return c1, c2, c3, c4
+        else:
+            c1 = self.stem(x)           # 1/4 (internal, not output)
+            c2 = self.conv2(c1)         # 1/8
+            c3 = self.conv3(c2)         # 1/16
+            c4 = self.conv4(c3)         # 1/32
+            return c2, c3, c4
 
 
 @register()
@@ -83,6 +106,7 @@ class DINOv3STAs(nn.Module):
         use_sta=True,
         conv_inplane=16,
         hidden_dim=None,
+        use_p2=False,  # Enable P2 feature output (stride=4)
     ):
         super(DINOv3STAs, self).__init__()
         if 'dinov3' in name:
@@ -103,6 +127,7 @@ class DINOv3STAs(nn.Module):
         embed_dim = self.dinov3.embed_dim
         self.interaction_indexes = interaction_indexes
         self.patch_size = patch_size
+        self.use_p2 = use_p2
 
         if not finetune:
             self.dinov3.eval()
@@ -112,23 +137,41 @@ class DINOv3STAs(nn.Module):
         self.use_sta = use_sta
         if use_sta:
             print(f"Using Lite Spatial Prior Module with inplanes={conv_inplane}")
-            self.sta = SpatialPriorModulev2(inplanes=conv_inplane)
+            self.sta = SpatialPriorModulev2(inplanes=conv_inplane, use_p2=use_p2)
         else:
             conv_inplane = 0
 
         # linear projection
         hidden_dim = hidden_dim if hidden_dim is not None else embed_dim
-        self.convs = nn.ModuleList([
-            nn.Conv2d(embed_dim + conv_inplane*2, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False),
-            nn.Conv2d(embed_dim + conv_inplane*4, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False),
-            nn.Conv2d(embed_dim + conv_inplane*4, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False)
-        ])
-        # norm
-        self.norms = nn.ModuleList([
-            nn.SyncBatchNorm(hidden_dim),
-            nn.SyncBatchNorm(hidden_dim),
-            nn.SyncBatchNorm(hidden_dim)
-        ])
+        
+        if use_p2:
+            # 4-scale feature projection (P2, P3, P4, P5)
+            self.convs = nn.ModuleList([
+                nn.Conv2d(embed_dim + conv_inplane*2, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False),  # P2
+                nn.Conv2d(embed_dim + conv_inplane*2, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False),  # P3
+                nn.Conv2d(embed_dim + conv_inplane*4, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False),  # P4
+                nn.Conv2d(embed_dim + conv_inplane*4, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False),  # P5
+            ])
+            # norm
+            self.norms = nn.ModuleList([
+                nn.SyncBatchNorm(hidden_dim),  # P2
+                nn.SyncBatchNorm(hidden_dim),  # P3
+                nn.SyncBatchNorm(hidden_dim),  # P4
+                nn.SyncBatchNorm(hidden_dim),  # P5
+            ])
+        else:
+            # Original 3-scale feature projection
+            self.convs = nn.ModuleList([
+                nn.Conv2d(embed_dim + conv_inplane*2, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False),
+                nn.Conv2d(embed_dim + conv_inplane*4, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False),
+                nn.Conv2d(embed_dim + conv_inplane*4, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False)
+            ])
+            # norm
+            self.norms = nn.ModuleList([
+                nn.SyncBatchNorm(hidden_dim),
+                nn.SyncBatchNorm(hidden_dim),
+                nn.SyncBatchNorm(hidden_dim)
+            ])
 
     def forward(self, x):
         # Code for matching with oss
@@ -146,26 +189,63 @@ class DINOv3STAs(nn.Module):
         if len(all_layers) == 1:    # repeat the same layer for all the three scales
             all_layers = [all_layers[0], all_layers[0], all_layers[0]]
         
-        sem_feats = []
-        num_scales = len(all_layers) - 2
-        for i, sem_feat in enumerate(all_layers):
-            feat, _ = sem_feat
-            sem_feat = feat.transpose(1, 2).view(bs, -1, H_c, W_c).contiguous()  # [B, D, H, W]
-            resize_H, resize_W = int(H_c * 2**(num_scales-i)), int(W_c * 2**(num_scales-i))
-            sem_feat = F.interpolate(sem_feat, size=[resize_H, resize_W], mode="bilinear", align_corners=False)
-            sem_feats.append(sem_feat)
+        if self.use_p2:
+            # 4-scale processing
+            sem_feats = []
+            num_scales = len(all_layers) - 3  # Expect 4 layers for 4 scales
+            
+            # Process semantic features from DINOv3
+            for i, sem_feat in enumerate(all_layers):
+                feat, _ = sem_feat
+                sem_feat = feat.transpose(1, 2).view(bs, -1, H_c, W_c).contiguous()  # [B, D, H, W]
+                # P2 needs 4x upscale, P3 needs 2x upscale, P4 and P5 stay same
+                if i == 0:  # P2 - 4x upscale
+                    resize_H, resize_W = H_c * 4, W_c * 4
+                elif i == 1:  # P3 - 2x upscale
+                    resize_H, resize_W = H_c * 2, W_c * 2
+                else:  # P4, P5 - same size
+                    resize_H, resize_W = H_c, W_c
+                sem_feat = F.interpolate(sem_feat, size=[resize_H, resize_W], mode="bilinear", align_corners=False)
+                sem_feats.append(sem_feat)
 
-        # fusion
-        fused_feats = []
-        if self.use_sta:
-            detail_feats = self.sta(x)
-            for sem_feat, detail_feat in zip(sem_feats, detail_feats):
-                fused_feats.append(torch.cat([sem_feat, detail_feat], dim=1))
+            # fusion with detail features
+            fused_feats = []
+            if self.use_sta:
+                detail_feats = self.sta(x)  # Returns (c1, c2, c3, c4) when use_p2=True
+                for sem_feat, detail_feat in zip(sem_feats, detail_feats):
+                    fused_feats.append(torch.cat([sem_feat, detail_feat], dim=1))
+            else:
+                fused_feats = sem_feats
+
+            # Apply projections and norms
+            c1 = self.norms[0](self.convs[0](fused_feats[0]))  # P2 (stride=4)
+            c2 = self.norms[1](self.convs[1](fused_feats[1]))  # P3 (stride=8)
+            c3 = self.norms[2](self.convs[2](fused_feats[2]))  # P4 (stride=16)
+            c4 = self.norms[3](self.convs[3](fused_feats[3]))  # P5 (stride=32)
+
+            return c1, c2, c3, c4
         else:
-            fused_feats = sem_feats
+            # Original 3-scale processing
+            sem_feats = []
+            num_scales = len(all_layers) - 2
+            for i, sem_feat in enumerate(all_layers):
+                feat, _ = sem_feat
+                sem_feat = feat.transpose(1, 2).view(bs, -1, H_c, W_c).contiguous()  # [B, D, H, W]
+                resize_H, resize_W = int(H_c * 2**(num_scales-i)), int(W_c * 2**(num_scales-i))
+                sem_feat = F.interpolate(sem_feat, size=[resize_H, resize_W], mode="bilinear", align_corners=False)
+                sem_feats.append(sem_feat)
 
-        c2 = self.norms[0](self.convs[0](fused_feats[0]))
-        c3 = self.norms[1](self.convs[1](fused_feats[1]))
-        c4 = self.norms[2](self.convs[2](fused_feats[2]))
+            # fusion
+            fused_feats = []
+            if self.use_sta:
+                detail_feats = self.sta(x)
+                for sem_feat, detail_feat in zip(sem_feats, detail_feats):
+                    fused_feats.append(torch.cat([sem_feat, detail_feat], dim=1))
+            else:
+                fused_feats = sem_feats
 
-        return c2, c3, c4
+            c2 = self.norms[0](self.convs[0](fused_feats[0]))
+            c3 = self.norms[1](self.convs[1](fused_feats[1]))
+            c4 = self.norms[2](self.convs[2](fused_feats[2]))
+
+            return c2, c3, c4

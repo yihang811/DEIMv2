@@ -14,6 +14,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .utils import get_activation
+from .small_object_modules import SmallObjectEnhancementModule
 
 from ..core import register
 
@@ -355,6 +356,8 @@ class HybridEncoder(nn.Module):
                  version='dfine',
                  csp_type='csp',
                  fuse_op='cat',
+                 use_p2=False,  # Enable P2 feature processing
+                 use_small_object_enhancement=False,  # Enable small object enhancement
                  ):
         super().__init__()
         self.in_channels = in_channels
@@ -367,6 +370,8 @@ class HybridEncoder(nn.Module):
         self.out_channels = [hidden_dim for _ in range(len(in_channels))]
         self.out_strides = feat_strides
         self.fuse_op = fuse_op
+        self.use_p2 = use_p2
+        self.use_small_object_enhancement = use_small_object_enhancement
 
         # channel projection
         self.input_proj = nn.ModuleList()
@@ -423,6 +428,17 @@ class HybridEncoder(nn.Module):
             self.downsample_convs.append(copy.deepcopy(SCDown_Conv))
             self.pan_blocks.append(copy.deepcopy(Fuse_Block))
 
+        # Small object enhancement module (optional)
+        if use_small_object_enhancement and use_p2 and len(in_channels) >= 4:
+            print("Using Small Object Enhancement Module for P2 feature")
+            self.small_obj_enhancer = SmallObjectEnhancementModule(
+                p2_channels=hidden_dim,
+                p3_channels=hidden_dim,
+                out_channels=hidden_dim
+            )
+        else:
+            self.small_obj_enhancer = None
+
         self._reset_parameters()
 
     def _reset_parameters(self):
@@ -471,6 +487,12 @@ class HybridEncoder(nn.Module):
 
                 memory :torch.Tensor = self.encoder[i](src_flatten, pos_embed=pos_embed)
                 proj_feats[enc_ind] = memory.permute(0, 2, 1).reshape(-1, self.hidden_dim, h, w).contiguous()
+
+        # Small object enhancement for P2 (if enabled)
+        if self.small_obj_enhancer is not None and len(proj_feats) >= 4:
+            # proj_feats[0] is P2, proj_feats[1] is P3
+            p2_enhanced = self.small_obj_enhancer(proj_feats[0], proj_feats[1])
+            proj_feats[0] = p2_enhanced
 
         # broadcasting and fusion
         inner_outs = [proj_feats[-1]]
