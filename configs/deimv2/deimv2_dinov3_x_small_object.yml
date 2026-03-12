@@ -16,7 +16,8 @@ DINOv3STAs:
   name: dinov3_vits16plus
   weights_path: ./ckpts/dinov3_vits16plus_pretrain_lvd1689m-4057cbaa.pth
   # Extract features from 4 layers for 4-scale feature pyramid
-  # Layer 2,5,8,11 correspond to P2(stride=4), P3(stride=8), P4(stride=16), P5(stride=32)
+  # Use n parameter to specify which layers to extract (0-indexed)
+  # layers 2,5,8,11 for stride 4,8, 16, 32
   interaction_indexes: [2, 5, 8, 11]
   finetune: True
   conv_inplane: 64

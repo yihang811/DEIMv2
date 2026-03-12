@@ -198,13 +198,15 @@ class DINOv3STAs(nn.Module):
             for i, sem_feat in enumerate(all_layers):
                 feat, _ = sem_feat
                 sem_feat = feat.transpose(1, 2).view(bs, -1, H_c, W_c).contiguous()  # [B, D, H, W]
-                # P2 needs 4x upscale, P3 needs 2x upscale, P4 and P5 stay same
+                # P2: stride=4 (H_c*4), P3: stride=8 (H_c*2), P4: stride=16 (H_c), P5: stride=32 (H_c/2)
                 if i == 0:  # P2 - 4x upscale
                     resize_H, resize_W = H_c * 4, W_c * 4
                 elif i == 1:  # P3 - 2x upscale
                     resize_H, resize_W = H_c * 2, W_c * 2
-                else:  # P4, P5 - same size
+                elif i == 2:  # P4 - same size
                     resize_H, resize_W = H_c, W_c
+                else:  # P5 - 2x downscale (stride=32)
+                    resize_H, resize_W = H_c // 2, W_c // 2
                 sem_feat = F.interpolate(sem_feat, size=[resize_H, resize_W], mode="bilinear", align_corners=False)
                 sem_feats.append(sem_feat)
 
