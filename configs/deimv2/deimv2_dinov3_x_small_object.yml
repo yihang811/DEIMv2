@@ -1,5 +1,5 @@
 __include__: [
-  '../dataset/coco_detection.yml',
+  '../dataset/custom_detection.yml',
   '../runtime.yml',
   '../base/dataloader.yml',
   '../base/optimizer.yml',
@@ -47,6 +47,11 @@ DEIMTransformer:
   # reg_scale: 8
   hidden_dim: 256
   dim_feedforward: 2048
+  num_points: 4  # Must be int, not list
+  cross_attn_method: default
+  query_select_method: default
+  activation: silu
+  mlp_act: silu
 
 optimizer:
   type: AdamW
