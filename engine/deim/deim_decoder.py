@@ -138,11 +138,11 @@ class TransformerDecoder(nn.Module):
         # 方案五：使用增强LQE或标准LQE
         if use_enhanced_lqe:
             self.lqe_layers = nn.ModuleList([
-                EnhancedLQE(4, 64, 2, reg_max, num_classes, act=act)
+                EnhancedLQE(4, hidden_dim, 2, reg_max, num_classes, act=act)
                 for _ in range(num_layers)
             ])
         else:
-            self.lqe_layers = nn.ModuleList([copy.deepcopy(LQE(4, 64, 2, reg_max, act=act)) for _ in range(num_layers)])
+            self.lqe_layers = nn.ModuleList([copy.deepcopy(LQE(4, hidden_dim, 2, reg_max, act=act)) for _ in range(num_layers)])
 
     def value_op(self, memory, value_proj, value_scale, memory_mask, memory_spatial_shapes):
         """
@@ -421,7 +421,7 @@ class DEIMTransformer(nn.Module):
         # 方案五：增强LQE
         if use_enhanced_lqe:
             self.enhanced_lqe_layers = nn.ModuleList([
-                EnhancedLQE(4, 64, 2, reg_max, num_classes, act=mlp_act)
+                EnhancedLQE(4, hidden_dim, 2, reg_max, num_classes, act=mlp_act)
                 for _ in range(num_layers)
             ])
 

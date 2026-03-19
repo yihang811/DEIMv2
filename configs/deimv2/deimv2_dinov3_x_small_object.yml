@@ -75,33 +75,6 @@ DEIMTransformer:
 
 optimizer:
   type: AdamW
-  params: 
-    -
-      # 1. DINOv3 backbone (低学习率)
-      params: '^(?=.*backbone\.dinov3).*'  
-      lr: 0.00001
-      weight_decay: 0.000125
-    -
-      # 2. 其他backbone部分 (STA, convs, norms)
-      params: '^(?=.*backbone)(?!.*dinov3).*'
-      lr: 0.0001
-      weight_decay: 0.000125
-    - 
-      # 3. 小目标检测专用模块（最高学习率）
-      params: '^(?=.*(?:small_object|small_obj|scale_adaptive|enhanced_lqe|query_selection|reg_scales)).*$'
-      lr: 0.001
-      weight_decay: 0.0001
-    -
-      # 4. Encoder（排除small_obj_enhancer）
-      params: '^(?=.*encoder)(?!.*small_obj).*'
-      lr: 0.0005
-      weight_decay: 0.000125
-    -
-      # 5. Decoder（排除小目标模块）
-      params: '^(?=.*decoder)(?!.*(?:small_object|scale_adaptive|enhanced_lqe|query_selection|reg_scales)).*$'
-      lr: 0.0005
-      weight_decay: 0.000125
-
   lr: 0.0005
   betas: [0.9, 0.999]
   weight_decay: 0.000125
