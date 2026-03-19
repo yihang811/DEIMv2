@@ -339,6 +339,8 @@ class DEIMTransformer(nn.Module):
                 nn.Parameter(torch.tensor([scale]), requires_grad=True)
                 for scale in reg_scales_per_level
             ])
+            # 保持兼容性：reg_scale指向第一个尺度
+            self.reg_scale = self.reg_scales[0]
         else:
             self.reg_scale = nn.Parameter(torch.tensor([reg_scale]), requires_grad=False)
 
