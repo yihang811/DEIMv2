@@ -24,6 +24,12 @@ from .utils import deformable_attention_core_func_v2, get_activation, inverse_si
 from .dfine_decoder import MSDeformableAttention, LQE, Integral
 from .dfine_utils import weighting_function, distance2bbox
 from .deim_utils import RMSNorm, SwiGLUFFN, Gate, MLP
+from .small_object_head import (
+    SmallObjectAwareQuerySelection,
+    ScaleAdaptiveRegHead,
+    SmallObjectDetectionBranch,
+    EnhancedLQE
+)
 
 __all__ = ['DEIMTransformer']
 
@@ -117,7 +123,7 @@ class TransformerDecoder(nn.Module):
     """
 
     def __init__(self, hidden_dim, decoder_layer, decoder_layer_wide, num_layers, num_head, reg_max, reg_scale, up,
-                 eval_idx=-1, layer_scale=2, act='relu'):
+                 eval_idx=-1, layer_scale=2, act='relu', use_enhanced_lqe=False, num_classes=80):
         super(TransformerDecoder, self).__init__()
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
@@ -125,9 +131,18 @@ class TransformerDecoder(nn.Module):
         self.num_head = num_head
         self.eval_idx = eval_idx if eval_idx >= 0 else num_layers + eval_idx
         self.up, self.reg_scale, self.reg_max = up, reg_scale, reg_max
+        self.use_enhanced_lqe = use_enhanced_lqe
         self.layers = nn.ModuleList([copy.deepcopy(decoder_layer) for _ in range(self.eval_idx + 1)] \
                     + [copy.deepcopy(decoder_layer_wide) for _ in range(num_layers - self.eval_idx - 1)])
-        self.lqe_layers = nn.ModuleList([copy.deepcopy(LQE(4, 64, 2, reg_max, act=act)) for _ in range(num_layers)])
+        
+        # 方案五：使用增强LQE或标准LQE
+        if use_enhanced_lqe:
+            self.lqe_layers = nn.ModuleList([
+                EnhancedLQE(4, 64, 2, reg_max, num_classes, act=act)
+                for _ in range(num_layers)
+            ])
+        else:
+            self.lqe_layers = nn.ModuleList([copy.deepcopy(LQE(4, 64, 2, reg_max, act=act)) for _ in range(num_layers)])
 
     def value_op(self, memory, value_proj, value_scale, memory_mask, memory_spatial_shapes):
         """
@@ -200,8 +215,11 @@ class TransformerDecoder(nn.Module):
 
             if self.training or i == self.eval_idx:
                 scores = score_head[i](output)
-                # Lqe does not affect the performance here.
-                scores = self.lqe_layers[i](scores, pred_corners)
+                # 方案五：使用增强LQE（如果启用）
+                if self.use_enhanced_lqe:
+                    scores = self.lqe_layers[i](scores, pred_corners, output)
+                else:
+                    scores = self.lqe_layers[i](scores, pred_corners)
                 dec_out_logits.append(scores)
                 dec_out_bboxes.append(inter_ref_bbox)
                 dec_out_pred_corners.append(pred_corners)
@@ -252,6 +270,13 @@ class DEIMTransformer(nn.Module):
                  use_gateway=True,
                  share_bbox_head=False,
                  share_score_head=False,
+                 # Small object detection enhancements
+                 use_small_object_head=False,
+                 small_object_threshold=0.1,
+                 use_scale_adaptive_reg=False,
+                 use_enhanced_lqe=False,
+                 num_points_per_scale=None,  # e.g., [8, 4, 4, 4] for 4 levels
+                 reg_scales_per_level=None,  # e.g., [2.0, 4.0, 6.0, 8.0] for 4 levels
                  ):
         super().__init__()
         assert len(feat_channels) <= num_levels
@@ -277,24 +302,63 @@ class DEIMTransformer(nn.Module):
         assert cross_attn_method in ('default', 'discrete'), ''
         self.cross_attn_method = cross_attn_method
         self.query_select_method = query_select_method
+        
+        # Small object detection flags
+        self.use_small_object_head = use_small_object_head
+        self.use_scale_adaptive_reg = use_scale_adaptive_reg
+        self.use_enhanced_lqe = use_enhanced_lqe
+        
         # -- print the parameters
         print(f"     --- Use Gateway@{use_gateway} ---")
         print(f"     --- Use Share Bbox Head@{share_bbox_head} ---")
         print(f"     --- Use Share Score Head@{share_score_head} ---")
+        print(f"     --- Use Small Object Head@{use_small_object_head} ---")
+        print(f"     --- Use Scale Adaptive Reg@{use_scale_adaptive_reg} ---")
+        print(f"     --- Use Enhanced LQE@{use_enhanced_lqe} ---")
 
         # backbone feature projection
         self._build_input_proj_layer(feat_channels)
 
+        # Multi-scale sampling points (方案二)
+        if num_points_per_scale is not None:
+            assert len(num_points_per_scale) == num_levels, "num_points_per_scale must match num_levels"
+            self.num_points_per_scale = num_points_per_scale
+        else:
+            if isinstance(num_points, list):
+                self.num_points_per_scale = num_points
+            else:
+                self.num_points_per_scale = [num_points] * num_levels
+
         # Transformer module
         self.up = nn.Parameter(torch.tensor([0.5]), requires_grad=False)
-        self.reg_scale = nn.Parameter(torch.tensor([reg_scale]), requires_grad=False)
+        
+        # Scale adaptive regression scales (方案三)
+        if use_scale_adaptive_reg and reg_scales_per_level is not None:
+            assert len(reg_scales_per_level) == num_levels, "reg_scales_per_level must match num_levels"
+            self.reg_scales = nn.ParameterList([
+                nn.Parameter(torch.tensor([scale]), requires_grad=True)
+                for scale in reg_scales_per_level
+            ])
+        else:
+            self.reg_scale = nn.Parameter(torch.tensor([reg_scale]), requires_grad=False)
+
+        # 方案二：多尺度采样点配置
+        if num_points_per_scale is not None and len(num_points_per_scale) == num_levels:
+            # 使用不同采样点数的多尺度可变形注意力
+            decoder_num_points = num_points_per_scale[0]  # 第一层使用最大采样点
+        else:
+            decoder_num_points = num_points if not isinstance(num_points, list) else num_points[0]
+        
         decoder_layer = TransformerDecoderLayer(hidden_dim, nhead, dim_feedforward, dropout, \
-            activation, num_levels, num_points, cross_attn_method=cross_attn_method, use_gateway=use_gateway)
+            activation, num_levels, decoder_num_points, cross_attn_method=cross_attn_method, use_gateway=use_gateway)
         decoder_layer_wide = TransformerDecoderLayer(hidden_dim, nhead, dim_feedforward, dropout, \
-            activation, num_levels, num_points, cross_attn_method=cross_attn_method, layer_scale=layer_scale, use_gateway=use_gateway)
+            activation, num_levels, decoder_num_points, cross_attn_method=cross_attn_method, layer_scale=layer_scale, use_gateway=use_gateway)
         self.decoder = TransformerDecoder(hidden_dim, decoder_layer, decoder_layer_wide, num_layers, nhead,
-                                          reg_max, self.reg_scale, self.up, eval_idx, layer_scale, act=activation)
-      # denoising
+                                          reg_max, self.reg_scale if not use_scale_adaptive_reg else self.reg_scales[0], 
+                                          self.up, eval_idx, layer_scale, act=activation,
+                                          use_enhanced_lqe=use_enhanced_lqe, num_classes=num_classes)
+        
+        # denoising
         self.num_denoising = num_denoising
         self.label_noise_ratio = label_noise_ratio
         self.box_noise_scale = box_noise_scale
@@ -330,6 +394,34 @@ class DEIMTransformer(nn.Module):
         self.dec_bbox_head = nn.ModuleList(
             [dec_bbox_head if share_bbox_head else copy.deepcopy(dec_bbox_head) for _ in range(self.eval_idx + 1)]
           + [MLP(scaled_dim, scaled_dim, 4 * (self.reg_max+1), 3, act=mlp_act) for _ in range(num_layers - self.eval_idx - 1)])
+
+        # Small Object Detection Enhancements
+        # 方案一：小目标感知查询选择
+        if use_small_object_head:
+            self.small_object_query_selection = SmallObjectAwareQuerySelection(
+                hidden_dim, num_classes, small_object_threshold
+            )
+        
+        # 方案三：尺度自适应回归头
+        if use_scale_adaptive_reg:
+            self.scale_adaptive_reg_head = ScaleAdaptiveRegHead(
+                hidden_dim, reg_max, num_levels, 
+                [2.0, 4.0, 6.0, 8.0] if reg_scales_per_level is None else reg_scales_per_level,
+                act=mlp_act
+            )
+        
+        # 方案四：小目标专用检测分支
+        if use_small_object_head:
+            self.small_object_branch = SmallObjectDetectionBranch(
+                hidden_dim, num_classes, reg_max, act=mlp_act
+            )
+        
+        # 方案五：增强LQE
+        if use_enhanced_lqe:
+            self.enhanced_lqe_layers = nn.ModuleList([
+                EnhancedLQE(4, 64, 2, reg_max, num_classes, act=mlp_act)
+                for _ in range(num_layers)
+            ])
 
         # init encoder output anchors and valid_mask
         if self.eval_spatial_size:
@@ -372,6 +464,37 @@ class DEIMTransformer(nn.Module):
         for m, in_channels in zip(self.input_proj, feat_channels):
             if in_channels != self.hidden_dim:
                 init.xavier_uniform_(m[0].weight)
+        
+        # 初始化小目标检测模块（使用Kaiming初始化，不影响预训练权重）
+        if self.use_small_object_head:
+            if hasattr(self, 'small_object_query_selection'):
+                for m in self.small_object_query_selection.modules():
+                    if isinstance(m, nn.Linear):
+                        init.kaiming_uniform_(m.weight, a=0, mode='fan_in')
+                        if m.bias is not None:
+                            init.constant_(m.bias, 0)
+            
+            if hasattr(self, 'small_object_branch'):
+                for m in self.small_object_branch.modules():
+                    if isinstance(m, nn.Linear):
+                        init.kaiming_uniform_(m.weight, a=0, mode='fan_in')
+                        if m.bias is not None:
+                            init.constant_(m.bias, 0)
+        
+        if self.use_scale_adaptive_reg and hasattr(self, 'scale_adaptive_reg_head'):
+            for m in self.scale_adaptive_reg_head.modules():
+                if isinstance(m, nn.Linear):
+                    init.kaiming_uniform_(m.weight, a=0, mode='fan_in')
+                    if m.bias is not None:
+                        init.constant_(m.bias, 0)
+        
+        if self.use_enhanced_lqe and hasattr(self, 'enhanced_lqe_layers'):
+            for lqe in self.enhanced_lqe_layers:
+                for m in lqe.modules():
+                    if isinstance(m, nn.Linear):
+                        init.kaiming_uniform_(m.weight, a=0, mode='fan_in')
+                        if m.bias is not None:
+                            init.constant_(m.bias, 0)
 
     def _build_input_proj_layer(self, feat_channels):
         self.input_proj = nn.ModuleList()
@@ -499,6 +622,12 @@ class DEIMTransformer(nn.Module):
         return content, enc_topk_bbox_unact, enc_topk_bboxes_list, enc_topk_logits_list
 
     def _select_topk(self, memory: torch.Tensor, outputs_logits: torch.Tensor, outputs_anchors_unact: torch.Tensor, topk: int):
+        # 方案一：小目标感知查询选择
+        if self.use_small_object_head and hasattr(self, 'small_object_query_selection'):
+            return self.small_object_query_selection(
+                memory, outputs_logits, outputs_anchors_unact, topk, self.training
+            )
+        
         if self.query_select_method == 'default':
             _, topk_ind = torch.topk(outputs_logits.max(-1).values, topk, dim=-1)
 

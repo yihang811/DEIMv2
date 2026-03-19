@@ -21,3 +21,12 @@ from .rtdetrv2_decoder import RTDETRTransformerv2
 from .postprocessor import PostProcessor
 from .deim_criterion import DEIMCriterion
 from .deim_decoder import DEIMTransformer
+
+# Small object detection enhancements
+from .small_object_head import (
+    SmallObjectAwareQuerySelection,
+    ScaleAdaptiveRegHead,
+    SmallObjectDetectionBranch,
+    EnhancedLQE,
+    SmallObjectDecoderLayer
+)

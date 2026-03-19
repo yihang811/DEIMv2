@@ -48,11 +48,30 @@ DEIMTransformer:
   # reg_scale: 8
   hidden_dim: 256
   dim_feedforward: 2048
-  num_points: [4, 4, 4, 4]  # 4 sampling points per scale for 4-scale pyramid
+  
+  # 方案二：多尺度采样点优化 - P2层使用更多采样点
+  num_points: [8, 4, 4, 4]  # P2: 8 points, P3/P4/P5: 4 points
+  num_points_per_scale: [8, 4, 4, 4]  # 显式配置每层的采样点数
+  
   cross_attn_method: default
   query_select_method: default
   activation: silu
   mlp_act: silu
+  
+  # ============================================
+  # 小目标检测头增强配置（五个方案全部启用）
+  # ============================================
+  
+  # 方案一：小目标感知查询选择
+  use_small_object_head: True
+  small_object_threshold: 0.1  # 面积小于0.1的视为小目标
+  
+  # 方案三：尺度自适应回归头
+  use_scale_adaptive_reg: True
+  reg_scales_per_level: [2.0, 4.0, 6.0, 8.0]  # P2/P3/P4/P5使用不同的回归范围
+  
+  # 方案五：IoU感知分类优化（增强LQE）
+  use_enhanced_lqe: True
 
 optimizer:
   type: AdamW
@@ -66,6 +85,11 @@ optimizer:
       params: '^(?=.*.dinov3)(?=.*(?:norm|bn|bias)).*$'    
       lr: 0.00001
       weight_decay: 0.
+    - 
+      # 小目标检测头模块（新增模块使用较高学习率）
+      params: '^(?=.*(?:small_object|scale_adaptive|enhanced_lqe|query_selection)).*$'
+      lr: 0.001  # 新模块使用更高学习率
+      weight_decay: 0.0001
     - 
       # including norm/bn/bias except for the self.dinov3
       params: '^(?=.*(?:sta|encoder|decoder|small_obj_enhancer))(?=.*(?:norm|bn|bias)).*$'
