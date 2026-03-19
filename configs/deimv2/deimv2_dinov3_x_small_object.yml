@@ -75,26 +75,6 @@ DEIMTransformer:
 
 optimizer:
   type: AdamW
-  params: 
-    -
-      # except norm/bn/bias in self.dinov3
-      params: '^(?=.*.dinov3)(?!.*(?:norm|bn|bias)).*$'  
-      lr: 0.00001
-    -
-      # including norm/bn/bias in self.dinov3
-      params: '^(?=.*.dinov3)(?=.*(?:norm|bn|bias)).*$'    
-      lr: 0.00001
-      weight_decay: 0.
-    - 
-      # 小目标检测头模块（新增模块使用较高学习率）
-      params: '^(?=.*(?:small_object|scale_adaptive|enhanced_lqe|query_selection)).*$'
-      lr: 0.001  # 新模块使用更高学习率
-      weight_decay: 0.0001
-    - 
-      # including norm/bn/bias except for the self.dinov3
-      params: '^(?=.*(?:sta|encoder|decoder|small_obj_enhancer))(?=.*(?:norm|bn|bias)).*$'
-      weight_decay: 0.
-
   lr: 0.0005
   betas: [0.9, 0.999]
   weight_decay: 0.000125
