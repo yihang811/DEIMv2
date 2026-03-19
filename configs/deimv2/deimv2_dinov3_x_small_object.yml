@@ -77,22 +77,54 @@ optimizer:
   type: AdamW
   params: 
     -
-      # except norm/bn/bias in self.dinov3
-      params: '^(?=.*.dinov3)(?!.*(?:norm|bn|bias)).*$'  
+      # 1. DINOv3 backbone weights (not norm/bn/bias)
+      params: '^(?=.*backbone\.dinov3)(?!.*(?:norm|bn|bias)).*$'  
       lr: 0.00001
     -
-      # including norm/bn/bias in self.dinov3
-      params: '^(?=.*.dinov3)(?=.*(?:norm|bn|bias)).*$'    
+      # 2. DINOv3 backbone norm/bn/bias
+      params: '^(?=.*backbone\.dinov3)(?=.*(?:norm|bn|bias)).*$'    
       lr: 0.00001
       weight_decay: 0.
+    -
+      # 3. STA module (P2 feature extraction) - weights
+      params: '^(?=.*backbone\.sta)(?!.*(?:norm|bn|bias)).*$'
+      lr: 0.0001
+    -
+      # 4. STA module - norm/bn/bias
+      params: '^(?=.*backbone\.sta)(?=.*(?:norm|bn|bias)).*$'
+      lr: 0.0001
+      weight_decay: 0.
+    -
+      # 5. Backbone convs/norms (layer 2,3 for P2 support) - weights
+      params: '^(?=.*backbone\.(convs|norms))(?!.*(?:norm|bn|bias)).*$'
+      lr: 0.0001
+    -
+      # 6. Backbone convs/norms - norm/bn/bias
+      params: '^(?=.*backbone\.(convs|norms))(?=.*(?:norm|bn|bias)).*$'
+      lr: 0.0001
+      weight_decay: 0.
     - 
-      # 小目标检测头模块（新增模块使用较高学习率）
-      params: '^(?=.*(?:small_object|small_obj|scale_adaptive|enhanced_lqe|query_selection)).*$'
-      lr: 0.001  # 新模块使用更高学习率
+      # 7. 小目标检测专用模块（高学习率）
+      params: '^(?=.*(?:small_object|small_obj|scale_adaptive|enhanced_lqe|query_selection|reg_scales)).*$'
+      lr: 0.001
       weight_decay: 0.0001
-    - 
-      # including norm/bn/bias except for the self.dinov3
-      params: '^(?=.*(?:sta|encoder|decoder|small_obj))(?=.*(?:norm|bn|bias)).*$'
+    -
+      # 8. Encoder一般参数（非norm/bn/bias）
+      params: '^(?=.*encoder)(?!.*(?:small_obj|norm|bn|bias)).*$'
+      lr: 0.0005
+    -
+      # 9. Encoder norm/bn/bias
+      params: '^(?=.*encoder)(?=.*(?:norm|bn|bias))(?!.*small_obj).*'
+      lr: 0.0005
+      weight_decay: 0.
+    -
+      # 10. Decoder一般参数（非小目标模块，非norm/bn/bias）
+      params: '^(?=.*decoder)(?!.*(?:small_object|scale_adaptive|enhanced_lqe|query_selection|reg_scales|norm|bn|bias)).*$'
+      lr: 0.0005
+    -
+      # 11. Decoder norm/bn/bias
+      params: '^(?=.*decoder)(?=.*(?:norm|bn|bias))(?!.*(?:small_object|scale_adaptive|enhanced_lqe|query_selection|reg_scales)).*$'
+      lr: 0.0005
       weight_decay: 0.
 
   lr: 0.0005
