@@ -22,9 +22,9 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'
 from engine.core import YAMLConfig
 
 label_map = {
-    1: 'person', 2: 'bicycle', 3: 'car', 4: 'motorbike', 5: 'aeroplane',
-    6: 'bus', 7: 'train', 8: 'truck', 9: 'boat', 10: 'trafficlight',
-    11: 'firehydrant', 12: 'streetsign', 13: 'stopsign', 14: 'parkingmeter',
+    0: 'background', 1: 'pedestrian', 2: 'people', 3: 'bicycle', 4: 'car', 5: 'van',
+    6: 'truck', 7: 'tricycle', 8: 'awning-tricycle', 9: 'bus', 10: 'motor',
+    11: 'others', 12: 'streetsign', 13: 'stopsign', 14: 'parkingmeter',
     15: 'bench', 16: 'bird', 17: 'cat', 18: 'dog', 19: 'horse',
     20: 'sheep', 21: 'cow', 22: 'elephant', 23: 'bear', 24: 'zebra',
     25: 'giraffe', 26: 'hat', 27: 'backpack', 28: 'umbrella', 29: 'shoe',
